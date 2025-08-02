@@ -62,6 +62,7 @@ command_exists() {
 
 # Display application menu
 show_menu() {
+    clear
     echo
     print_header "=== Application Installer ==="
     echo -e "${BLUE}Select applications to install:${NC}"
@@ -81,21 +82,28 @@ show_menu() {
     echo
 }
 
-# Get user selection
+# Get user selection with proper input handling
 get_user_selection() {
     while true; do
-        echo -n -e "${YELLOW}Enter your selection: ${NC}"
-        read -r selection
+        echo -e -n "${YELLOW}Enter your selection: ${NC}"
+        read selection
         
+        # Handle empty input
+        if [[ -z "$selection" ]]; then
+            print_error "Please enter a selection."
+            continue
+        fi
+        
+        # Handle quit
         if [[ "$selection" == "q" || "$selection" == "Q" ]]; then
             print_status "Exiting..."
             exit 0
         fi
         
-        # Validate input
+        # Validate input - allow numbers 1-7 and spaces
         if [[ "$selection" =~ ^[1-7]([[:space:]]+[1-7])*$ ]]; then
             echo "$selection"
-            return
+            return 0
         else
             print_error "Invalid selection. Please enter numbers 1-7 separated by spaces, or 'q' to quit."
         fi
@@ -111,7 +119,8 @@ install_docker() {
         if is_package_installed_arch "docker"; then
             print_warning "Docker is already installed"
         else
-            sudo pacman -S docker docker-compose --noconfirm
+            sudo pacman -Sy
+            sudo pacman -S docker docker-compose --noconfirm --needed
             sudo systemctl enable docker
             sudo systemctl start docker
             sudo usermod -aG docker "$USER"
@@ -159,7 +168,8 @@ install_nginx() {
         if is_package_installed_arch "nginx"; then
             print_warning "Nginx is already installed"
         else
-            sudo pacman -S nginx --noconfirm
+            sudo pacman -Sy
+            sudo pacman -S nginx --noconfirm --needed
             sudo systemctl enable nginx
             print_success "Nginx installed successfully"
         fi
@@ -209,7 +219,7 @@ install_gvm() {
         # Install dependencies
         local distro=$(detect_distro)
         if [[ "$distro" == "arch" ]]; then
-            sudo pacman -S git mercurial make binutils bison gcc --noconfirm
+            sudo pacman -S git mercurial make binutils bison gcc --noconfirm --needed
         elif [[ "$distro" == "debian" ]]; then
             sudo apt-get install curl git mercurial make binutils bison gcc build-essential -y
         fi
@@ -222,7 +232,6 @@ install_gvm() {
         
         # Install and use latest Go version
         if command_exists gvm; then
-            # Get latest Go version (you may need to check manually and update this)
             local latest_go="go1.21.5"  # Update this to the actual latest version
             gvm install "$latest_go" -B
             gvm use "$latest_go" --default
@@ -248,7 +257,8 @@ install_python() {
         fi
         
         if [ ${#packages_needed[@]} -gt 0 ]; then
-            sudo pacman -S "${packages_needed[@]}" --noconfirm
+            sudo pacman -Sy
+            sudo pacman -S "${packages_needed[@]}" --noconfirm --needed
             print_success "Python3 with pip3 installed successfully"
         else
             print_warning "Python3 and pip3 are already installed"
@@ -285,7 +295,8 @@ install_vim() {
         if is_package_installed_arch "vim"; then
             print_warning "Vim is already installed"
         else
-            sudo pacman -S vim --noconfirm
+            sudo pacman -Sy
+            sudo pacman -S vim --noconfirm --needed
             print_success "Vim installed successfully"
         fi
     elif [[ "$distro" == "debian" ]]; then
