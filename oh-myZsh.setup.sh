@@ -4,6 +4,8 @@
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print colored output
@@ -19,13 +21,31 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# Detect the distribution
+print_header() {
+    echo -e "${CYAN}[HEADER]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+# Check if running as root
+check_root() {
+    if [[ $EUID -eq 0 ]]; then
+        print_error "This script should not be run as root. Please run as a regular user."
+        exit 1
+    fi
+}
+
+# Detect the distribution with better precision
 detect_distro() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         if [[ "$ID" == "manjaro" ]] || [[ "$ID_LIKE" == *"arch"* ]]; then
             echo "arch"
-        elif [[ "$ID" == "ubuntu" ]] || [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
+        elif [[ "$ID" == "ubuntu" ]]; then
+            echo "ubuntu"
+        elif [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
             echo "debian"
         else
             echo "unknown"
@@ -35,94 +55,74 @@ detect_distro() {
     fi
 }
 
+# Check if command exists
+command_exists() {
+    command -v "$1" &> /dev/null
+}
+
 # Check if package is installed (Arch/Manjaro)
 is_package_installed_arch() {
     pacman -Qi "$1" &> /dev/null
 }
 
-# Check if package is installed (Debian/Ubuntu)
+# Check if package is installed (Debian/Ubuntu) - improved
 is_package_installed_debian() {
-    dpkg -l | grep -q "^ii  $1 "
+    dpkg -l "$1" 2>/dev/null | grep -q "^ii" || command_exists "$1"
 }
 
 # Install packages based on distribution
 install_packages() {
     local distro=$1
     
+    print_header "Installing ZSH and dependencies..."
+    
     if [[ "$distro" == "arch" ]]; then
-        print_status "Installing ZSH and related packages for Manjaro/Arch..."
+        print_status "Installing packages for Manjaro/Arch..."
         
-        # Check and install zsh
-        if ! is_package_installed_arch "zsh"; then
-            print_status "Installing zsh..."
-            sudo pacman -S zsh --noconfirm
+        # Update package database
+        sudo pacman -Sy
+        
+        local packages=("zsh" "git" "curl" "wget")
+        local packages_needed=()
+        
+        for pkg in "${packages[@]}"; do
+            if ! is_package_installed_arch "$pkg"; then
+                packages_needed+=("$pkg")
+            else
+                print_warning "$pkg is already installed"
+            fi
+        done
+        
+        if [ ${#packages_needed[@]} -gt 0 ]; then
+            print_status "Installing: ${packages_needed[*]}"
+            sudo pacman -S "${packages_needed[@]}" --noconfirm --needed
+            print_success "Packages installed successfully"
         else
-            print_warning "zsh is already installed"
+            print_status "All required packages are already installed"
         fi
         
-        # Check and install git (needed for plugins)
-        if ! is_package_installed_arch "git"; then
-            print_status "Installing git..."
-            sudo pacman -S git --noconfirm
-        else
-            print_warning "git is already installed"
-        fi
-        
-        # Check and install curl (needed for Oh My ZSH)
-        if ! is_package_installed_arch "curl"; then
-            print_status "Installing curl..."
-            sudo pacman -S curl --noconfirm
-        else
-            print_warning "curl is already installed"
-        fi
-        
-    elif [[ "$distro" == "debian" ]]; then
-        print_status "Installing ZSH and related packages for Debian/Ubuntu..."
+    elif [[ "$distro" == "ubuntu" ]] || [[ "$distro" == "debian" ]]; then
+        print_status "Installing packages for $distro..."
         
         # Update package list
         sudo apt update
         
-        packages_to_install=()
+        local packages=("zsh" "git" "curl" "wget")
+        local packages_needed=()
         
-        # Check zsh
-        if ! is_package_installed_debian "zsh"; then
-            packages_to_install+=("zsh")
-        else
-            print_warning "zsh is already installed"
-        fi
-        
-        # Check zsh-autosuggestions
-        if ! is_package_installed_debian "zsh-autosuggestions"; then
-            packages_to_install+=("zsh-autosuggestions")
-        else
-            print_warning "zsh-autosuggestions is already installed"
-        fi
-        
-        # Check zsh-syntax-highlighting
-        if ! is_package_installed_debian "zsh-syntax-highlighting"; then
-            packages_to_install+=("zsh-syntax-highlighting")
-        else
-            print_warning "zsh-syntax-highlighting is already installed"
-        fi
-        
-        # Check git
-        if ! is_package_installed_debian "git"; then
-            packages_to_install+=("git")
-        else
-            print_warning "git is already installed"
-        fi
-        
-        # Check curl
-        if ! is_package_installed_debian "curl"; then
-            packages_to_install+=("curl")
-        else
-            print_warning "curl is already installed"
-        fi
+        for pkg in "${packages[@]}"; do
+            if ! is_package_installed_debian "$pkg"; then
+                packages_needed+=("$pkg")
+            else
+                print_warning "$pkg is already installed"
+            fi
+        done
         
         # Install packages if needed
-        if [ ${#packages_to_install[@]} -gt 0 ]; then
-            print_status "Installing: ${packages_to_install[*]}"
-            sudo apt install "${packages_to_install[@]}" -y
+        if [ ${#packages_needed[@]} -gt 0 ]; then
+            print_status "Installing: ${packages_needed[*]}"
+            sudo apt install "${packages_needed[@]}" -y
+            print_success "Packages installed successfully"
         else
             print_status "All required packages are already installed"
         fi
@@ -134,7 +134,7 @@ is_ohmyzsh_installed() {
     [ -d "$HOME/.oh-my-zsh" ]
 }
 
-# Install Oh My ZSH
+# Install Oh My ZSH with better error handling
 install_ohmyzsh() {
     if is_ohmyzsh_installed; then
         print_warning "Oh My ZSH is already installed"
@@ -142,13 +142,31 @@ install_ohmyzsh() {
     fi
     
     print_status "Installing Oh My ZSH..."
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
     
-    if [ $? -eq 0 ]; then
-        print_status "Oh My ZSH installed successfully"
+    # Create backup of existing .zshrc if it exists
+    if [ -f "$HOME/.zshrc" ]; then
+        cp "$HOME/.zshrc" "$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+        print_status "Backup of existing .zshrc created"
+    fi
+    
+    # Install Oh My ZSH with timeout and error handling
+    if command_exists curl; then
+        if timeout 60 sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended; then
+            print_success "Oh My ZSH installed successfully"
+        else
+            print_error "Failed to install Oh My ZSH via curl"
+            return 1
+        fi
+    elif command_exists wget; then
+        if timeout 60 sh -c "$(wget -O- https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended; then
+            print_success "Oh My ZSH installed successfully"
+        else
+            print_error "Failed to install Oh My ZSH via wget"
+            return 1
+        fi
     else
-        print_error "Failed to install Oh My ZSH"
-        exit 1
+        print_error "Neither curl nor wget is available"
+        return 1
     fi
 }
 
@@ -158,9 +176,9 @@ is_plugin_installed() {
     [ -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/$plugin_name" ]
 }
 
-# Install ZSH plugins
+# Install ZSH plugins with improved error handling
 install_plugins() {
-    print_status "Installing ZSH plugins..."
+    print_header "Installing ZSH plugins..."
     
     local plugins=(
         "zsh-autosuggestions:https://github.com/zsh-users/zsh-autosuggestions.git"
@@ -168,6 +186,11 @@ install_plugins() {
         "fast-syntax-highlighting:https://github.com/zdharma-continuum/fast-syntax-highlighting.git"
         "zsh-autocomplete:https://github.com/marlonrichert/zsh-autocomplete.git"
     )
+    
+    local plugin_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins"
+    
+    # Ensure plugins directory exists
+    mkdir -p "$plugin_dir"
     
     for plugin_info in "${plugins[@]}"; do
         local plugin_name="${plugin_info%%:*}"
@@ -177,95 +200,236 @@ install_plugins() {
             print_warning "$plugin_name is already installed"
         else
             print_status "Installing $plugin_name..."
-            if [[ "$plugin_name" == "zsh-autocomplete" ]]; then
-                git clone --depth 1 "$plugin_url" "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/$plugin_name"
-            else
-                git clone "$plugin_url" "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/$plugin_name"
-            fi
             
-            if [ $? -eq 0 ]; then
-                print_status "$plugin_name installed successfully"
+            # Use timeout and better error handling
+            if timeout 60 git clone --depth 1 "$plugin_url" "$plugin_dir/$plugin_name"; then
+                print_success "$plugin_name installed successfully"
             else
                 print_error "Failed to install $plugin_name"
+                # Continue with other plugins instead of failing completely
+                continue
             fi
         fi
     done
 }
 
-# Configure .zshrc
+# Configure .zshrc with backup and validation
 configure_zshrc() {
-    print_status "Configuring .zshrc..."
+    print_header "Configuring .zshrc..."
     
     if [ ! -f "$HOME/.zshrc" ]; then
         print_error ".zshrc file not found. Oh My ZSH installation might have failed."
-        exit 1
+        return 1
     fi
     
     # Check if plugins are already configured
-    if grep -q "plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete)" "$HOME/.zshrc"; then
-        print_warning "Plugins are already configured in .zshrc"
+    if grep -q "plugins=(.*zsh-autosuggestions.*)" "$HOME/.zshrc"; then
+        print_warning "Custom plugins are already configured in .zshrc"
+        return 0
+    fi
+    
+    # Create backup
+    cp "$HOME/.zshrc" "$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
+    print_status "Backup of .zshrc created"
+    
+    # Update plugins line with improved sed command
+    if grep -q "^plugins=" "$HOME/.zshrc"; then
+        sed -i 's/^plugins=(.*)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete)/' "$HOME/.zshrc"
     else
-        # Backup original .zshrc
-        cp "$HOME/.zshrc" "$HOME/.zshrc.backup.$(date +%Y%m%d_%H%M%S)"
-        print_status "Backup of .zshrc created"
-        
-        # Update plugins line
-        sed -i 's/plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete)/' "$HOME/.zshrc"
-        print_status ".zshrc configured successfully"
+        # Add plugins line if it doesn't exist
+        echo "plugins=(git zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete)" >> "$HOME/.zshrc"
+    fi
+    
+    # Add useful configurations
+    cat >> "$HOME/.zshrc" << 'EOF'
+
+# Custom ZSH configurations
+# Enable case-insensitive completion
+CASE_SENSITIVE="false"
+
+# Enable command auto-correction
+ENABLE_CORRECTION="true"
+
+# Display red dots whilst waiting for completion
+COMPLETION_WAITING_DOTS="true"
+
+# Disable marking untracked files as dirty (faster git status)
+DISABLE_UNTRACKED_FILES_DIRTY="true"
+
+# History settings
+HISTSIZE=10000
+SAVEHIST=10000
+setopt SHARE_HISTORY
+setopt APPEND_HISTORY
+setopt INC_APPEND_HISTORY
+setopt HIST_EXPIRE_DUPS_FIRST
+setopt HIST_IGNORE_DUPS
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_FIND_NO_DUPS
+setopt HIST_SAVE_NO_DUPS
+
+# Aliases
+alias ll='ls -alF'
+alias la='ls -A'
+alias l='ls -CF'
+alias grep='grep --color=auto'
+alias ..='cd ..'
+alias ...='cd ../..'
+EOF
+    
+    print_success ".zshrc configured successfully"
+}
+
+# Install Powerlevel10k theme (optional)
+install_powerlevel10k() {
+    print_status "Installing Powerlevel10k theme..."
+    
+    local theme_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k"
+    
+    if [ -d "$theme_dir" ]; then
+        print_warning "Powerlevel10k is already installed"
+        return 0
+    fi
+    
+    if timeout 60 git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$theme_dir"; then
+        # Update theme in .zshrc
+        if [ -f "$HOME/.zshrc" ]; then
+            sed -i 's/^ZSH_THEME=.*/ZSH_THEME="powerlevel10k\/powerlevel10k"/' "$HOME/.zshrc"
+            print_success "Powerlevel10k theme installed and configured"
+        fi
+    else
+        print_error "Failed to install Powerlevel10k theme"
     fi
 }
 
-# Change default shell
+# Change default shell with validation
 change_shell() {
+    local current_shell
     current_shell=$(basename "$SHELL")
     
     if [[ "$current_shell" == "zsh" ]]; then
         print_warning "ZSH is already the default shell"
-    else
-        print_status "Changing default shell to ZSH..."
-        chsh -s "$(which zsh)"
-        
-        if [ $? -eq 0 ]; then
-            print_status "Default shell changed to ZSH successfully"
-        else
-            print_error "Failed to change default shell. You may need to run 'chsh -s \$(which zsh)' manually"
-        fi
+        return 0
     fi
+    
+    print_status "Changing default shell to ZSH..."
+    
+    # Check if zsh is in /etc/shells
+    if ! grep -q "$(which zsh)" /etc/shells; then
+        print_status "Adding zsh to /etc/shells..."
+        echo "$(which zsh)" | sudo tee -a /etc/shells > /dev/null
+    fi
+    
+    # Change shell
+    if chsh -s "$(which zsh)"; then
+        print_success "Default shell changed to ZSH successfully"
+    else
+        print_error "Failed to change default shell. You may need to run 'chsh -s \$(which zsh)' manually"
+        return 1
+    fi
+}
+
+# Verify installation
+verify_installation() {
+    print_header "Verifying installation..."
+    
+    # Check ZSH installation
+    if command_exists zsh; then
+        local zsh_version
+        zsh_version=$(zsh --version | head -n1)
+        print_success "ZSH installed: $zsh_version"
+    else
+        print_error "ZSH installation failed"
+        return 1
+    fi
+    
+    # Check Oh My ZSH
+    if [ -d "$HOME/.oh-my-zsh" ]; then
+        print_success "Oh My ZSH installed successfully"
+    else
+        print_error "Oh My ZSH installation failed"
+        return 1
+    fi
+    
+    # Check plugins
+    local plugin_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins"
+    local installed_plugins=0
+    local total_plugins=4
+    
+    for plugin in zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete; do
+        if [ -d "$plugin_dir/$plugin" ]; then
+            ((installed_plugins++))
+        fi
+    done
+    
+    print_status "Plugins installed: $installed_plugins/$total_plugins"
+    
+    print_success "Installation verification completed"
 }
 
 # Main execution
 main() {
-    print_status "Starting ZSH installation and configuration..."
+    print_header "Starting ZSH installation and configuration..."
+    
+    # Check if running as root
+    check_root
     
     # Detect distribution
+    local distro
     distro=$(detect_distro)
     
     if [[ "$distro" == "unknown" ]]; then
-        print_error "Unsupported distribution. This script supports Manjaro/Arch and Debian/Ubuntu systems."
+        print_error "Unsupported distribution. This script supports Manjaro/Arch, Ubuntu, and Debian systems."
         exit 1
     fi
     
     print_status "Detected distribution: $distro"
     
     # Install packages
-    install_packages "$distro"
+    if ! install_packages "$distro"; then
+        print_error "Package installation failed"
+        exit 1
+    fi
     
     # Install Oh My ZSH
-    install_ohmyzsh
+    if ! install_ohmyzsh; then
+        print_error "Oh My ZSH installation failed"
+        exit 1
+    fi
     
     # Install plugins
     install_plugins
     
     # Configure .zshrc
-    configure_zshrc
+    if ! configure_zshrc; then
+        print_error "ZSH configuration failed"
+        exit 1
+    fi
+    
+    # Install Powerlevel10k theme (optional)
+    read -p "Do you want to install Powerlevel10k theme? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        install_powerlevel10k
+    fi
     
     # Change default shell
     change_shell
     
-    print_status "Installation completed successfully!"
-    echo -e "${GREEN}Please restart your terminal or run 'source ~/.zshrc' to apply changes.${NC}"
-    echo -e "${YELLOW}Note: You may need to log out and log back in for the shell change to take effect.${NC}"
+    # Verify installation
+    verify_installation
+    
+    print_success "ZSH installation and configuration completed successfully!"
+    echo
+    print_header "Next steps:"
+    echo -e "${BLUE}1.${NC} Restart your terminal or run: ${YELLOW}source ~/.zshrc${NC}"
+    echo -e "${BLUE}2.${NC} Log out and log back in for shell changes to take effect"
+    echo -e "${BLUE}3.${NC} If you installed Powerlevel10k, run: ${YELLOW}p10k configure${NC}"
+    echo -e "${BLUE}4.${NC} Enjoy your enhanced ZSH experience!"
 }
 
-# Run main function
-main "$@"
+# Run main function with error handling
+if ! main "$@"; then
+    print_error "Script execution failed"
+    exit 1
+fi
