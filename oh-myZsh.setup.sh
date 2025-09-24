@@ -176,15 +176,23 @@ is_plugin_installed() {
     [ -d "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/$plugin_name" ]
 }
 
-# Install ZSH plugins with improved error handling
+# Install ZSH plugins with FIXED URL parsing
 install_plugins() {
     print_header "Installing ZSH plugins..."
     
+    # FIXED: Use proper array format with complete URLs
     local plugins=(
-        "zsh-autosuggestions:https://github.com/zsh-users/zsh-autosuggestions.git"
-        "zsh-syntax-highlighting:https://github.com/zsh-users/zsh-syntax-highlighting.git"
-        "fast-syntax-highlighting:https://github.com/zdharma-continuum/fast-syntax-highlighting.git"
-        "zsh-autocomplete:https://github.com/marlonrichert/zsh-autocomplete.git"
+        "zsh-autosuggestions"
+        "zsh-syntax-highlighting" 
+        "fast-syntax-highlighting"
+        "zsh-autocomplete"
+    )
+    
+    local plugin_urls=(
+        "https://github.com/zsh-users/zsh-autosuggestions.git"
+        "https://github.com/zsh-users/zsh-syntax-highlighting.git"
+        "https://github.com/zdharma-continuum/fast-syntax-highlighting.git"
+        "https://github.com/marlonrichert/zsh-autocomplete.git"
     )
     
     local plugin_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins"
@@ -192,16 +200,18 @@ install_plugins() {
     # Ensure plugins directory exists
     mkdir -p "$plugin_dir"
     
-    for plugin_info in "${plugins[@]}"; do
-        local plugin_name="${plugin_info%%:*}"
-        local plugin_url="${plugin_info##*:}"
+    # Install plugins using index-based approach
+    for i in "${!plugins[@]}"; do
+        local plugin_name="${plugins[$i]}"
+        local plugin_url="${plugin_urls[$i]}"
         
         if is_plugin_installed "$plugin_name"; then
             print_warning "$plugin_name is already installed"
         else
             print_status "Installing $plugin_name..."
+            print_status "Cloning from: $plugin_url"
             
-            # Use timeout and better error handling
+            # Use timeout and better error handling with proper URL
             if timeout 60 git clone --depth 1 "$plugin_url" "$plugin_dir/$plugin_name"; then
                 print_success "$plugin_name installed successfully"
             else
@@ -280,29 +290,7 @@ EOF
     print_success ".zshrc configured successfully"
 }
 
-# Install Powerlevel10k theme (optional)
-install_powerlevel10k() {
-    print_status "Installing Powerlevel10k theme..."
-    
-    local theme_dir="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/themes/powerlevel10k"
-    
-    if [ -d "$theme_dir" ]; then
-        print_warning "Powerlevel10k is already installed"
-        return 0
-    fi
-    
-    if timeout 60 git clone --depth=1 https://github.com/romkatv/powerlevel10k.git "$theme_dir"; then
-        # Update theme in .zshrc
-        if [ -f "$HOME/.zshrc" ]; then
-            sed -i 's/^ZSH_THEME=.*/ZSH_THEME="powerlevel10k\/powerlevel10k"/' "$HOME/.zshrc"
-            print_success "Powerlevel10k theme installed and configured"
-        fi
-    else
-        print_error "Failed to install Powerlevel10k theme"
-    fi
-}
-
-# Change default shell with validation
+# FIXED: Change default shell with proper PAM handling
 change_shell() {
     local current_shell
     current_shell=$(basename "$SHELL")
@@ -314,19 +302,70 @@ change_shell() {
     
     print_status "Changing default shell to ZSH..."
     
-    # Check if zsh is in /etc/shells
-    if ! grep -q "$(which zsh)" /etc/shells; then
-        print_status "Adding zsh to /etc/shells..."
-        echo "$(which zsh)" | sudo tee -a /etc/shells > /dev/null
-    fi
+    # Get the path to zsh
+    local zsh_path
+    zsh_path=$(which zsh)
     
-    # Change shell
-    if chsh -s "$(which zsh)"; then
-        print_success "Default shell changed to ZSH successfully"
-    else
-        print_error "Failed to change default shell. You may need to run 'chsh -s \$(which zsh)' manually"
+    if [[ -z "$zsh_path" ]]; then
+        print_error "ZSH not found in PATH"
         return 1
     fi
+    
+    # Check if zsh is in /etc/shells
+    if ! grep -q "^$zsh_path$" /etc/shells; then
+        print_status "Adding zsh to /etc/shells..."
+        echo "$zsh_path" | sudo tee -a /etc/shells > /dev/null
+    fi
+    
+    # FIXED: Try different approaches for chsh
+    print_status "Attempting to change shell using multiple methods..."
+    
+    # Method 1: Standard chsh
+    if chsh -s "$zsh_path" 2>/dev/null; then
+        print_success "Default shell changed to ZSH successfully (method 1)"
+        return 0
+    fi
+    
+    # Method 2: Try with sudo (sometimes needed)
+    if sudo chsh -s "$zsh_path" "$USER" 2>/dev/null; then
+        print_success "Default shell changed to ZSH successfully (method 2)"
+        return 0
+    fi
+    
+    # Method 3: Direct usermod (fallback)
+    if sudo usermod -s "$zsh_path" "$USER" 2>/dev/null; then
+        print_success "Default shell changed to ZSH successfully (method 3)"
+        return 0
+    fi
+    
+    # Method 4: Manual /etc/passwd editing (last resort)
+    print_warning "Automatic shell change failed. Attempting manual method..."
+    
+    # Create a temporary script to edit /etc/passwd
+    local temp_script="/tmp/change_shell_$$"
+    cat > "$temp_script" << EOF
+#!/bin/bash
+sed -i 's|^$USER:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*$|$USER:\2:\3:\4:\5:\6:$zsh_path|' /etc/passwd
+EOF
+    
+    chmod +x "$temp_script"
+    
+    if sudo "$temp_script" 2>/dev/null; then
+        rm -f "$temp_script"
+        print_success "Default shell changed to ZSH successfully (manual method)"
+        return 0
+    fi
+    
+    rm -f "$temp_script"
+    
+    # If all methods fail, provide manual instructions
+    print_error "All automatic methods failed. Please change your shell manually:"
+    echo -e "${YELLOW}Run one of these commands:${NC}"
+    echo -e "  ${BLUE}sudo chsh -s $zsh_path $USER${NC}"
+    echo -e "  ${BLUE}sudo usermod -s $zsh_path $USER${NC}"
+    echo -e "Or edit ${BLUE}/etc/passwd${NC} and change your shell entry to: ${BLUE}$zsh_path${NC}"
+    
+    return 1
 }
 
 # Verify installation
@@ -359,6 +398,9 @@ verify_installation() {
     for plugin in zsh-autosuggestions zsh-syntax-highlighting fast-syntax-highlighting zsh-autocomplete; do
         if [ -d "$plugin_dir/$plugin" ]; then
             ((installed_plugins++))
+            print_status "✓ $plugin installed"
+        else
+            print_warning "✗ $plugin not installed"
         fi
     done
     
@@ -406,25 +448,18 @@ main() {
         exit 1
     fi
     
-    # Install Powerlevel10k theme (optional)
-    read -p "Do you want to install Powerlevel10k theme? (y/N): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        install_powerlevel10k
-    fi
-    
-    # Change default shell
+    # Change default shell (with improved error handling)
     change_shell
     
     # Verify installation
     verify_installation
     
-    print_success "ZSH installation and configuration completed successfully!"
+    print_success "ZSH installation and configuration completed!"
     echo
     print_header "Next steps:"
     echo -e "${BLUE}1.${NC} Restart your terminal or run: ${YELLOW}source ~/.zshrc${NC}"
     echo -e "${BLUE}2.${NC} Log out and log back in for shell changes to take effect"
-    echo -e "${BLUE}3.${NC} If you installed Powerlevel10k, run: ${YELLOW}p10k configure${NC}"
+    echo -e "${BLUE}3.${NC} If shell change failed, run manually: ${YELLOW}sudo chsh -s \$(which zsh) \$USER${NC}"
     echo -e "${BLUE}4.${NC} Enjoy your enhanced ZSH experience!"
 }
 
